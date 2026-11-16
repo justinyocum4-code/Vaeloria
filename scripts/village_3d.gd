@@ -7,6 +7,12 @@ extends Node3D
 ## v1.1.2: talks and boss approaches open with a full-screen movie
 ## scene (a short cinematic video clip), and background music plays
 ## (village theme here, battle theme in the fight).
+## v1.1.3: the lines were spoken inside the movie (device TTS +
+## subtitles, clip looping). v1.1.4: the movie is only an opening
+## shot now — the talk itself happens in the close-up, with each
+## character's own recorded voice and a mouth that opens and closes
+## while they speak. A video clip is fixed footage, so no mouth in
+## it can ever move; the live 3D characters are where talking shows.
 ## Walk with arrows / D-pad / WASD, or tap-to-move on touch screens.
 ## Talk to Elder Maren and Lyra Voss (Lyra joins the party), then face
 ## the Ember Wolf at the east gate. Dragging a finger across the screen
@@ -31,6 +37,9 @@ const VIDEO_SCENES := {
 }
 const WOLF_APPROACH_DIST := 4.0
 const WOLF_APPROACH_RESET_DIST := 7.0
+# How long the opening movie shot stays up before the close-up talk
+# starts (the clips are 10 s; the first few seconds are the shot).
+const ESTABLISH_SECONDS := 4.0
 
 var _player: CharacterBody3D
 var _player_model: Node3D
@@ -335,7 +344,7 @@ func _build_npcs() -> void:
 	}, [
 		"Kael! There you are. I felt the stones flicker too.",
 		"Fire and lightning answer me, and I will answer you. I am coming with you.",
-		"Lyra Voss joined the party! The east gate is that way — the Ember Wolf is waiting.",
+		"The east gate is that way — the Ember Wolf is waiting.",
 	], [
 		"Ready when you are. The wolf will not wait forever.",
 	])
@@ -777,15 +786,15 @@ func _talk_to(npc: Dictionary) -> void:
 	_near_npc = npc
 	if npc["enemy"] != "" and not _npc_already_met(npc["id"]):
 		_pending_battle = npc["enemy"]
-	# Movie first: the lines are spoken inside the movie itself
-	# (subtitles + voice, clip loops until the lines are done).
-	# NPCs without a video go straight to the dialogue scene, and
-	# skipping the movie falls back to it too.
+	# Movie first: a short silent establishing shot (the clip's first
+	# few seconds). The talk itself happens in the close-up dialogue
+	# scene that follows — real voices, moving mouths. NPCs without
+	# a video go straight to the dialogue scene.
 	var video_path: String = VIDEO_SCENES.get(npc["id"], "")
 	if video_path != "":
 		_video_npc = npc
 		_video_active = true
-		_video.play(video_path, _cutscene_lines(npc))
+		_video.play(video_path, ESTABLISH_SECONDS)
 	else:
 		_start_cutscene(npc)
 
@@ -801,16 +810,41 @@ func _on_dialogue_finished() -> void:
 	_finish_talk()
 
 
-## Lines for a talk, as the movie and dialogue scenes consume them.
+## Lines for a talk, as the dialogue scene consumes them. Each
+## entry carries the voice-file key for that line. The wolf's line
+## is Kael speaking, so it is labeled Kael and uses his voice.
 func _cutscene_lines(npc: Dictionary) -> Array:
 	var lines: Array = []
-	for line in _npc_lines(npc):
-		lines.append({"speaker": npc["name"], "text": line})
+	var raw: Array = _npc_lines(npc)
+	var voice_id: String = "kael" if npc["id"] == "wolf" else npc["id"]
+	var speaker_name: String = "Kael" if npc["id"] == "wolf" else npc["name"]
+	# Repeat lines are voiced after the first-talk lines (maren_04,
+	# lyra_04, kael_02), so the file key must skip past them.
+	var offset := 0
+	if _npc_already_met(npc["id"]):
+		offset = (npc["first_lines"] as Array).size()
+	for i in raw.size():
+		lines.append({
+			"speaker": speaker_name,
+			"text": raw[i],
+			"voice": "%s_%02d" % [voice_id, offset + i + 1],
+		})
 	return lines
 
 
-## Cinematic scene: the camera sweeps in close on Kael and the NPC
-## facing each other, and the cutscene UI plays their lines aloud.
+## The 3D model whose mouth moves while this NPC's lines play: the
+## NPC's own model, except the wolf's talk, where Kael is the one
+## speaking (the wolf has no mouth to move).
+func _talk_speaker_node(npc: Dictionary) -> Node3D:
+	if npc["id"] == "wolf":
+		return _player_model
+	return npc["node"]
+
+
+## Cinematic scene: the camera sweeps in close on the speaker —
+## framed from the front-side so their face and moving mouth are
+## visible — and the cutscene UI plays their lines in their own
+## recorded voice. The listener stands behind the speaker, in shot.
 func _start_cutscene(npc: Dictionary) -> void:
 	_cutscene_active = true
 	var player_pos: Vector3 = _player.global_position
@@ -819,19 +853,21 @@ func _start_cutscene(npc: Dictionary) -> void:
 	# Face each other (humanoids are built facing +Z).
 	_player_model.rotation.y = atan2(npc_pos.x - player_pos.x, npc_pos.z - player_pos.z)
 	npc_node.rotation.y = atan2(player_pos.x - npc_pos.x, player_pos.z - npc_pos.z)
-	# Frame the shot: camera to the side of the pair, distance scaled
-	# to how far apart they stand.
-	var mid := (player_pos + npc_pos) * 0.5
-	var sep := player_pos.distance_to(npc_pos)
-	var dir := npc_pos - player_pos
-	dir.y = 0
-	if dir.length() < 0.5:
-		dir = Vector3(0, 0, 1)
-	dir = dir.normalized()
-	var side := dir.cross(Vector3.UP).normalized()
-	var cam_dist := clampf(sep * 0.9 + 1.5, 4.5, 12.0)
-	var cam_pos := mid + side * cam_dist + Vector3(0, 1.6, 0)
-	var look_target := mid + Vector3(0, 1.1, 0)
+	# Frame the speaker: the camera sits on the side the speaker
+	# faces (toward the listener), offset to one side so the shot is
+	# a three-quarter view of their face, not a flat profile. A
+	# straight side shot hides the mouth entirely.
+	var speaker_node := _talk_speaker_node(npc)
+	var speaker_pos: Vector3 = speaker_node.global_position
+	var listener_pos: Vector3 = npc_pos if npc["id"] == "wolf" else player_pos
+	var facing := listener_pos - speaker_pos
+	facing.y = 0
+	if facing.length() < 0.5:
+		facing = Vector3(0, 0, 1)
+	facing = facing.normalized()
+	var side := facing.cross(Vector3.UP).normalized()
+	var cam_pos := speaker_pos + facing * 3.2 + side * 2.4 + Vector3(0, 1.7, 0)
+	var look_target := speaker_pos + Vector3(0, 1.5, 0)
 	if _camera_tween != null and _camera_tween.is_valid():
 		_camera_tween.kill()
 	# During the shot the camera rides the rig at local (0,0,0), so
@@ -843,8 +879,8 @@ func _start_cutscene(npc: Dictionary) -> void:
 	_camera_tween.tween_property(_camera_rig, "global_position", cam_pos, 0.8).set_trans(Tween.TRANS_CUBIC).set_ease(Tween.EASE_OUT)
 	var look := Transform3D(Basis(), cam_pos).looking_at(look_target, Vector3.UP)
 	_camera_tween.tween_property(_camera_rig, "quaternion", look.basis.get_rotation_quaternion(), 0.8).set_trans(Tween.TRANS_CUBIC).set_ease(Tween.EASE_OUT)
-	# Build the lines for the cutscene UI.
-	_cutscene.play(_cutscene_lines(npc))
+	# Build the lines for the cutscene UI, voiced by the speaker.
+	_cutscene.play(_cutscene_lines(npc), speaker_node)
 
 
 ## Return the camera to the normal following view after a scene.
@@ -871,17 +907,17 @@ func _on_cutscene_skipped() -> void:
 	_end_cutscene()
 
 
-## The movie played through all its lines: the talk is complete —
-## Lyra joins, the wolf fight starts. Only skipping the movie falls
-## back to the letterbox dialogue scene (see _on_video_skipped).
+## The establishing shot is over (ran its seconds, or the clip
+## ended): cut to the close-up, where the talk happens — real
+## voices, moving mouths. Skipping the shot does the same thing.
 func _on_video_finished() -> void:
 	_video_active = false
-	_finish_talk()
+	_start_cutscene(_video_npc)
 
 
-## The movie was skipped: fall back to the letterbox dialogue
-## scene so the talk is never lost. Only skipping the dialogue
-## itself cancels the conversation.
+## The shot was skipped: go straight to the close-up talk, so the
+## talk is never lost. Only skipping the dialogue itself cancels
+## the conversation.
 func _on_video_skipped() -> void:
 	_video_active = false
 	_start_cutscene(_video_npc)
