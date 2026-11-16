@@ -125,13 +125,13 @@ func _update_narration_text() -> void:
 func _on_new_game() -> void:
 	Sfx.play_select()
 	GameState.reset_new_game()
-	get_tree().change_scene_to_file("res://scenes/village.tscn")
+	get_tree().change_scene_to_file("res://scenes/village_3d.tscn")
 
 
 func _on_continue() -> void:
 	Sfx.play_select()
 	if GameState.load_game():
-		get_tree().change_scene_to_file("res://scenes/village.tscn")
+		get_tree().change_scene_to_file("res://scenes/village_3d.tscn")
 
 
 func _on_toggle_narration() -> void:
