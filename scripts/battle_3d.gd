@@ -30,6 +30,9 @@ var _result_button: Button
 var _battle_over := false
 var _scroll: ScrollContainer
 var _leaving := false
+# Torch flicker.
+var _torch_lights: Array = []
+var _anim_time := 0.0
 
 
 func _ready() -> void:
@@ -118,6 +121,9 @@ func _build_arena() -> void:
 		var torch := MeshFactory.make_torch()
 		torch.position = torch_pos
 		add_child(torch)
+		for child in torch.get_children():
+			if child is OmniLight3D:
+				_torch_lights.append(child)
 
 	_camera = Camera3D.new()
 	_camera.position = Vector3(0, 6.5, 10.5)
@@ -264,6 +270,16 @@ func _flash_enemy() -> void:
 
 
 # -------------------------------------------------------------- mechanics ---
+
+func _process(delta: float) -> void:
+	# Torch flames flicker while the fight plays out.
+	_anim_time += delta
+	for i in _torch_lights.size():
+		var light: OmniLight3D = _torch_lights[i]
+		if is_instance_valid(light):
+			var phase := float(i) * 1.7
+			light.light_energy = 0.9 + 0.22 * sin(_anim_time * 7.0 + phase) + 0.12 * sin(_anim_time * 13.0 + phase * 1.7)
+
 
 func _on_attack() -> void:
 	if _battle_over:
