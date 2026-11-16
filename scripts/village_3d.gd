@@ -4,6 +4,9 @@ extends Node3D
 ## scene (camera close-up, lines spoken aloud, auto-advance) instead
 ## of a text box, and the village is dressed up (market stall, well,
 ## flowers, stepping stones, flickering torches, floating embers).
+## v1.1.2: talks and boss approaches open with a full-screen movie
+## scene (a short cinematic video clip), and background music plays
+## (village theme here, battle theme in the fight).
 ## Walk with arrows / D-pad / WASD, or tap-to-move on touch screens.
 ## Talk to Elder Maren and Lyra Voss (Lyra joins the party), then face
 ## the Ember Wolf at the east gate. Dragging a finger across the screen
@@ -19,6 +22,15 @@ const SPAWN := Vector3(0, 0, 12)
 # A fingertip tap always drifts a few pixels; 64px is generous enough
 # for a real finger while still far below a deliberate drag.
 const TAP_TOLERANCE := 64.0
+# Movie scenes: one short cinematic video per character. The wolf's
+# video also plays when Kael walks up to the gate (see _process).
+const VIDEO_SCENES := {
+	"maren": "res://assets/cutscenes/cutscene_maren.ogv",
+	"lyra": "res://assets/cutscenes/cutscene_lyra.ogv",
+	"wolf": "res://assets/cutscenes/cutscene_wolf.ogv",
+}
+const WOLF_APPROACH_DIST := 4.0
+const WOLF_APPROACH_RESET_DIST := 7.0
 
 var _player: CharacterBody3D
 var _player_model: Node3D
@@ -27,6 +39,10 @@ var _camera: Camera3D
 var _dialogue: DialogueBox
 var _cutscene: CutsceneDialogue
 var _cutscene_active := false
+var _video: VideoCutscene
+var _video_active := false
+var _video_npc: Dictionary = {}
+var _wolf_approach_done := false
 var _camera_tween: Tween
 var _status_label: Label
 var _objective_label: Label
@@ -80,6 +96,15 @@ func _ready() -> void:
 	add_child(cut_layer)
 	_cutscene.finished.connect(_on_cutscene_finished)
 	_cutscene.skipped.connect(_on_cutscene_skipped)
+	# Full-screen movie scenes (layer 40, above the dialogue).
+	var video_layer := CanvasLayer.new()
+	video_layer.layer = 40
+	_video = VideoCutscene.new()
+	video_layer.add_child(_video)
+	add_child(video_layer)
+	_video.finished.connect(_on_video_finished)
+	_video.skipped.connect(_on_video_skipped)
+	Music.play_village()
 	_update_objective()
 	if not GameState.intro_done:
 		GameState.intro_done = true
@@ -510,7 +535,7 @@ func _on_talk_button_pressed() -> void:
 # -------------------------------------------------------------- interaction ---
 
 func _physics_process(delta: float) -> void:
-	if _dialogue.is_open() or _cutscene_active:
+	if _dialogue.is_open() or _cutscene_active or _video_active:
 		_player.velocity = Vector3(0, -0.5, 0)
 		_player.move_and_slide()
 		return
@@ -549,7 +574,7 @@ func _process(delta: float) -> void:
 	if _player != null and _camera_rig != null and not _cutscene_active:
 		var weight := 1.0 - exp(-6.0 * delta)
 		_camera_rig.global_position = _camera_rig.global_position.lerp(_player.global_position, weight)
-	if _dialogue.is_open() or _cutscene_active:
+	if _dialogue.is_open() or _cutscene_active or _video_active:
 		_prompt_label.visible = false
 		_talk_button.visible = false
 		return
@@ -568,6 +593,26 @@ func _process(delta: float) -> void:
 		_show_prompt("Talk: %s  —  press Enter / A" % _near_npc["name"])
 		_talk_button.text = "Talk: %s" % _near_npc["name"]
 		_talk_button.visible = true
+	# Boss approach: walking up to the Ember Wolf starts its movie
+	# scene on its own — no tap needed. The flag resets when Kael
+	# walks away, so the scene can trigger again.
+	if not GameState.wolf_defeated:
+		var wolf_npc := _npc_by_id("wolf")
+		if not wolf_npc.is_empty():
+			var wolf_node: Node3D = wolf_npc["node"]
+			var wolf_dist := _player.global_position.distance_to(wolf_node.global_position)
+			if wolf_dist < WOLF_APPROACH_DIST and not _wolf_approach_done:
+				_wolf_approach_done = true
+				_talk_to(wolf_npc)
+			elif wolf_dist > WOLF_APPROACH_RESET_DIST:
+				_wolf_approach_done = false
+
+
+func _npc_by_id(id: String) -> Dictionary:
+	for npc in _npcs:
+		if npc["id"] == id:
+			return npc
+	return {}
 
 
 ## Torch flicker, pond shimmer, floating embers — the village stays
@@ -601,7 +646,7 @@ func _input(event: InputEvent) -> void:
 	# reads it aloud; the HUD buttons read themselves. The dialogue box
 	# handles its own explore while it is open, and the cutscene
 	# handles its own input while a scene plays.
-	if _dialogue.is_open() or _cutscene_active:
+	if _dialogue.is_open() or _cutscene_active or _video_active:
 		return
 	var items: Array = []
 	items.append({
@@ -638,11 +683,13 @@ func _over_hud_button(pos: Vector2) -> bool:
 
 
 func _notification(what: int) -> void:
-	# Android system Back button: exit a cutscene first, then close
-	# the dialogue, otherwise back to the title — never straight out
-	# of the game.
+	# Android system Back button: skip a movie first, exit a cutscene
+	# next, then close the dialogue, otherwise back to the title —
+	# never straight out of the game.
 	if what == NOTIFICATION_WM_GO_BACK_REQUEST:
-		if _cutscene_active:
+		if _video_active:
+			_video.skip()
+		elif _cutscene_active:
 			_cutscene.finish_skip()
 		elif _dialogue.is_open():
 			_dialogue.dismiss()
@@ -651,7 +698,7 @@ func _notification(what: int) -> void:
 
 
 func _unhandled_input(event: InputEvent) -> void:
-	if _dialogue.is_open() or _cutscene_active:
+	if _dialogue.is_open() or _cutscene_active or _video_active:
 		return
 	if event.is_action_pressed("ui_cancel"):
 		_on_title_pressed()
@@ -730,7 +777,15 @@ func _talk_to(npc: Dictionary) -> void:
 	_near_npc = npc
 	if npc["enemy"] != "" and not _npc_already_met(npc["id"]):
 		_pending_battle = npc["enemy"]
-	_start_cutscene(npc)
+	# Movie first, then the spoken dialogue scene. NPCs without a
+	# video go straight to the dialogue.
+	var video_path: String = VIDEO_SCENES.get(npc["id"], "")
+	if video_path != "":
+		_video_npc = npc
+		_video_active = true
+		_video.play(video_path)
+	else:
+		_start_cutscene(npc)
 
 
 func _show_lines(speaker: String, lines: Array) -> void:
@@ -807,6 +862,19 @@ func _on_cutscene_skipped() -> void:
 	# not join, the wolf does not attack. The player can talk again.
 	_pending_battle = ""
 	_end_cutscene()
+
+
+## The movie played or was skipped: either way the talk goes ahead
+## into the spoken dialogue scene. Only skipping the dialogue
+## itself cancels the conversation.
+func _on_video_finished() -> void:
+	_video_active = false
+	_start_cutscene(_video_npc)
+
+
+func _on_video_skipped() -> void:
+	_video_active = false
+	_start_cutscene(_video_npc)
 
 
 func _finish_talk() -> void:

@@ -37,6 +37,7 @@ var _anim_time := 0.0
 
 func _ready() -> void:
 	_rng.randomize()
+	Music.play_battle()
 	ExploreTouch.reset()
 	ExploreTouch3D.reset()
 	_build_arena()

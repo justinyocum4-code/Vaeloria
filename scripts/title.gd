@@ -9,6 +9,7 @@ var _narration_button: Button
 
 func _ready() -> void:
 	ExploreTouch.reset()
+	Music.play_village()
 	_build()
 
 
@@ -86,7 +87,7 @@ func _build() -> void:
 	vbox.add_child(_narration_button)
 
 	var footer := Label.new()
-	footer.text = "A Lynxos RPG  •  Godot 4.6  •  D-pad, touch and TV friendly\nWalk with arrows or D-pad. Talk with Enter, Space or the A button."
+	footer.text = "A Lynxos RPG  •  Godot 4.6  •  D-pad, touch and TV friendly\nWalk with arrows or D-pad. Talk with Enter, Space or the A button.\nMusic: Kevin MacLeod (incompetech.com) — CC BY 4.0"
 	footer.horizontal_alignment = HORIZONTAL_ALIGNMENT_CENTER
 	footer.add_theme_font_size_override("font_size", 20)
 	footer.add_theme_color_override("font_color", Color(0.7, 0.7, 0.78))
