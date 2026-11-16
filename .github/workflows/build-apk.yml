@@ -38,11 +38,31 @@ jobs:
 
       - name: Point Godot at the Java SDK (export fails without this editor setting)
         run: |
-          JAVA_DIR="$(dirname "$(dirname "$(readlink -f "$(which java)")")")"
+          JAVA_BIN="$(command -v java || echo /usr/lib/jvm/java-17-openjdk-amd64/bin/java)"
+          JAVA_DIR="$(dirname "$(dirname "$(readlink -f "$JAVA_BIN")")")"
+          test -x "$JAVA_DIR/bin/java"
+          echo "JAVA_HOME=$JAVA_DIR" >> $GITHUB_ENV
           echo "Java SDK: $JAVA_DIR"
           mkdir -p ~/.config/godot
-          printf '[resource]\nexport/android/java_sdk_path="%s"\n' "$JAVA_DIR" > ~/.config/godot/editor_settings-4.6.tres
-          cat ~/.config/godot/editor_settings-4.6.tres
+          # Let Godot create a valid editor-settings file first, then patch it
+          # with a proper gd_resource header (a bare [resource] file is ignored).
+          godot --headless --editor --quit || true
+          python3 - "$JAVA_DIR" <<'PYEOF'
+          import os, re, sys
+          java_dir = sys.argv[1]
+          path = os.path.expanduser("~/.config/godot/editor_settings-4.6.tres")
+          text = open(path).read() if os.path.exists(path) else ""
+          if "[gd_resource" not in text:
+              text = '[gd_resource type="EditorSettings" format=3]\n\n[resource]\n' + text
+          if "export/android/java_sdk_path" in text:
+              text = re.sub(r'export/android/java_sdk_path="[^"]*"',
+                            'export/android/java_sdk_path="' + java_dir + '"', text)
+          else:
+              text = text.rstrip() + '\nexport/android/java_sdk_path="' + java_dir + '"\n'
+          open(path, "w").write(text)
+          print(open(path).read())
+          PYEOF
+          grep java_sdk_path ~/.config/godot/editor_settings-4.6.tres
 
       - name: Install Android export templates (missing from the container)
         run: |
