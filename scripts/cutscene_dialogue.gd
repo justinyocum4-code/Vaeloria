@@ -1,16 +1,20 @@
 class_name CutsceneDialogue
 extends Control
 ## Cinematic dialogue for NPC conversations in the 3D village: the
-## camera cuts in close on the two speakers (the village drives that
-## part) and each line plays like a movie scene — spoken aloud
-## automatically, then auto-advancing on a timer. The timer length is
-## estimated from the word count; it never depends on TTS callbacks,
-## which are unreliable headless and vary by device. Tap anywhere or
-## press Enter to move to the next line now; Back or the Skip button
-## exits the scene early (and the talk does not count — Lyra does not
-## join, the wolf does not attack — so the player can simply talk
-## again). Letterbox bars top and bottom sell the movie feel. The
-## speaker's name and the line are also shown as large text.
+## camera cuts in close on the speaker (the village drives that
+## part) and each line plays like a movie scene — spoken aloud in the
+## character's own recorded voice (res://assets/voices/*.ogg, a
+## different natural voice per character), with the speaker's mouth
+## opening and closing while they talk and the line shown as a
+## subtitle. The line auto-advances when the voice clip ends (plus a
+## short beat). If a voice file is missing, the line falls back to
+## the device TTS voice and a word-count timer, so a talk never goes
+## silent. Tap anywhere or press Enter to move to the next line now;
+## Back or the Skip button exits the scene early (and the talk does
+## not count — Lyra does not join, the wolf does not attack — so the
+## player can simply talk again). Letterbox bars top and bottom sell
+## the movie feel. The speaker's name and the line are also shown
+## as large text.
 
 signal finished
 signal skipped
@@ -19,11 +23,16 @@ const MIN_LINE_TIME := 2.0
 const MAX_LINE_TIME := 15.0
 const SECONDS_PER_WORD := 0.45
 const AFTER_BEAT := 0.9
+const FLAP_INTERVAL := 0.12
 
 var _speaker_label: Label
 var _line_label: Label
 var _skip_button: Button
 var _timer: Timer
+var _voice_player: AudioStreamPlayer
+var _flap_timer: Timer
+var _speaker_node: Node3D
+var _mouth_open := false
 var _lines: Array = []
 var _index := 0
 var _active := false
@@ -106,6 +115,17 @@ func _ready() -> void:
 	_timer.timeout.connect(advance)
 	add_child(_timer)
 
+	# Recorded voice lines: one player, reused for every line.
+	_voice_player = AudioStreamPlayer.new()
+	add_child(_voice_player)
+
+	# Mouth flap: while a voice line plays, the speaker's mouth
+	# toggles open and closed on this beat.
+	_flap_timer = Timer.new()
+	_flap_timer.wait_time = FLAP_INTERVAL
+	_flap_timer.timeout.connect(_flap_mouth)
+	add_child(_flap_timer)
+
 
 func is_active() -> bool:
 	return _active
@@ -119,11 +139,15 @@ static func line_duration(text: String) -> float:
 	return clampf(float(words) * SECONDS_PER_WORD + AFTER_BEAT, MIN_LINE_TIME, MAX_LINE_TIME)
 
 
-## lines: Array of Dictionaries {"speaker": String, "text": String}.
-func play(lines: Array) -> void:
+## lines: Array of Dictionaries {"speaker": String, "text": String,
+## "voice": String} — "voice" is the file key under
+## res://assets/voices/ (e.g. "lyra_01"), without the extension.
+## speaker_node is the 3D model whose mouth flaps while talking.
+func play(lines: Array, speaker_node: Node3D = null) -> void:
 	if lines.is_empty() or _active:
 		return
 	_lines = lines
+	_speaker_node = speaker_node
 	_index = 0
 	_active = true
 	visible = true
@@ -135,14 +159,49 @@ func _show_current() -> void:
 	_speaker_label.text = str(entry.get("speaker", ""))
 	var text: String = str(entry.get("text", ""))
 	_line_label.text = text
-	Narration.speak(text)
-	_timer.start(line_duration(text))
+	# The character's own recorded voice if the file is there;
+	# otherwise the device TTS voice, so the line is still heard.
+	var voice_key: String = str(entry.get("voice", ""))
+	var voice_path := "res://assets/voices/%s.ogg" % voice_key
+	var stream: AudioStream = null
+	if voice_key != "" and ResourceLoader.exists(voice_path):
+		stream = load(voice_path)
+	if stream != null:
+		_voice_player.stream = stream
+		_voice_player.play()
+		_mouth_open = false
+		MeshFactory.set_mouth_open(_speaker_node, 0.0)
+		_flap_timer.start()
+		_timer.start(stream.get_length() + AFTER_BEAT)
+	else:
+		Narration.speak(text)
+		_timer.start(line_duration(text))
+
+
+## While a voice line plays, flap the speaker's mouth open and
+## closed. It moves in time with the talking, not per syllable —
+## a flap, not true lip-sync.
+func _flap_mouth() -> void:
+	if not _active or _speaker_node == null:
+		return
+	_mouth_open = not _mouth_open
+	var amount := randf_range(0.6, 1.0) if _mouth_open else 0.0
+	MeshFactory.set_mouth_open(_speaker_node, amount)
+
+
+func _stop_line_audio() -> void:
+	_flap_timer.stop()
+	_voice_player.stop()
+	_mouth_open = false
+	MeshFactory.set_mouth_open(_speaker_node, 0.0)
+	Narration.stop()
 
 
 func advance() -> void:
 	if not _active:
 		return
 	Sfx.play_select()
+	_stop_line_audio()
 	_timer.stop()
 	_index += 1
 	if _index >= _lines.size():
@@ -152,10 +211,10 @@ func advance() -> void:
 
 
 func _finish_complete() -> void:
+	_stop_line_audio()
 	_timer.stop()
 	_active = false
 	visible = false
-	Narration.stop()
 	finished.emit()
 
 
@@ -164,10 +223,10 @@ func _finish_complete() -> void:
 func finish_skip() -> void:
 	if not _active:
 		return
+	_stop_line_audio()
 	_timer.stop()
 	_active = false
 	visible = false
-	Narration.stop()
 	skipped.emit()
 
 
