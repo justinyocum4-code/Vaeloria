@@ -1,0 +1,39 @@
+; Engine configuration file.
+; Vaeloria — an original turn-based RPG (Godot 4.6, GDScript, 2D top-down).
+; Inspired by the feel of classic JRPGs; all characters, story and art are original.
+
+config_version=5
+
+[application]
+
+config/name="Vaeloria"
+config/description="An original turn-based RPG. Explore Aldermere village, gather your party, and face the Ember Wolf. Party, turn-based battles, epic story — in the spirit of classic JRPGs, not a copy of any of them."
+run/main_scene="res://scenes/title.tscn"
+config/features=PackedStringArray("4.6", "GL Compatibility")
+config/icon="res://icon.svg"
+
+[autoload]
+
+GameState="*res://scripts/game_state.gd"
+Narration="*res://scripts/narration.gd"
+Sfx="*res://scripts/sfx.gd"
+
+[display]
+
+window/size/viewport_width=960
+window/size/viewport_height=540
+window/size/resizable=true
+window/stretch/mode="canvas_items"
+window/stretch/aspect="expand"
+window/handheld/orientation=0
+
+[input_devices]
+
+pointing/emulate_touch_from_mouse=true
+
+[rendering]
+
+renderer/rendering_method="gl_compatibility"
+renderer/rendering_method.mobile="gl_compatibility"
+textures/canvas_textures/default_texture_filter=0
+environment/defaults/default_clear_color=Color(0.043, 0.047, 0.098, 1)
