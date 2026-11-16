@@ -1,15 +1,16 @@
 # Vaeloria — Godot 4.6 Android APK build (GitHub Actions).
 #
-# How it works: runs inside the barichello/godot-ci container, which ships
-# the matching Godot editor + export templates + Android SDK/JDK, then
-# exports a DEBUG-signed APK from the "Android" preset in export_presets.cfg.
+# How it works: runs inside the barichello/godot-ci container (which is
+# minimal — the steps below install Python, the export templates, the JDK
+# and the Android 34/35 SDK packages), then exports a RELEASE APK from the
+# "Android" preset in export_presets.cfg and signs it with the Lynxos
+# keystore.
 #
-# TODO (parent, before a store/public release):
-#   - Release signing with the Lynxos keystore. Add the 4 repo secrets
-#     (KEYSTORE_BASE64, KEYSTORE_PASSWORD, KEY_PASSWORD, KEY_ALIAS=lynxos),
-#     decode the keystore in a step, and switch the export to release mode
-#     with GODOT_ANDROID_KEYSTORE_* env vars. Do NOT paste keystore values
-#     into this file. Debug APKs install fine for sideload testing.
+# Release signing: the repo needs the 4 secrets (KEYSTORE_BASE64,
+# KEYSTORE_PASSWORD, KEY_PASSWORD, KEY_ALIAS=lynxos) — the same values as
+# the other Lynxos app repos. The export runs unsigned
+# (package/signed=false in the preset), then zipalign + apksigner sign it
+# here. Keystore values are never pasted into this file.
 #   - Leanback: the game is fully D-pad navigable; enabling the Android TV
 #     Leanback launcher entry is an editor preset option to confirm on the
 #     first real device test (see BUILD_NOTES.md).
@@ -94,14 +95,36 @@ jobs:
       - name: Import project (validates scripts and scenes)
         run: godot --headless --import --quit
 
-      - name: Export debug APK
+      - name: Export release APK (unsigned — signing happens in the next step)
         run: |
           mkdir -p build
-          godot --headless --verbose --export-debug "Android" build/lynxos-rpg-debug.apk
+          godot --headless --verbose --export-release "Android" build/lynxos-rpg-release.apk
+
+      - name: Sign APK with the Lynxos keystore
+        env:
+          KEYSTORE_BASE64: ${{ secrets.KEYSTORE_BASE64 }}
+          KEYSTORE_PASSWORD: ${{ secrets.KEYSTORE_PASSWORD }}
+          KEY_PASSWORD: ${{ secrets.KEY_PASSWORD }}
+          KEY_ALIAS: ${{ secrets.KEY_ALIAS }}
+        run: |
+          test -n "$KEYSTORE_BASE64"
+          test -n "$KEYSTORE_PASSWORD"
+          test -n "$KEY_PASSWORD"
+          test -n "$KEY_ALIAS"
+          echo "$KEYSTORE_BASE64" | base64 -d > release.keystore
+          APKSIGNER="$(find /usr/lib/android-sdk/build-tools -name apksigner -type f | sort -V | tail -1)"
+          ZIPALIGN="$(find /usr/lib/android-sdk/build-tools -name zipalign -type f | sort -V | tail -1)"
+          echo "apksigner: $APKSIGNER"
+          echo "zipalign: $ZIPALIGN"
+          test -n "$APKSIGNER" && test -n "$ZIPALIGN"
+          "$ZIPALIGN" -f 4 build/lynxos-rpg-release.apk build/lynxos-rpg-aligned.apk
+          mv build/lynxos-rpg-aligned.apk build/lynxos-rpg-release.apk
+          "$APKSIGNER" sign --ks release.keystore --ks-pass "pass:$KEYSTORE_PASSWORD" --key-pass "pass:$KEY_PASSWORD" --ks-key-alias "$KEY_ALIAS" build/lynxos-rpg-release.apk
+          "$APKSIGNER" verify --verbose build/lynxos-rpg-release.apk
 
       - name: Upload APK
         uses: actions/upload-artifact@v4
         with:
           name: lynxos-rpg-apk
-          path: build/lynxos-rpg-debug.apk
+          path: build/lynxos-rpg-release.apk
           if-no-files-found: error
