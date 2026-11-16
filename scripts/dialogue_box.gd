@@ -105,11 +105,33 @@ func advance() -> void:
 		_show_current()
 
 
+func dismiss() -> void:
+	# Close without advancing (e.g. Android Back button).
+	if _open:
+		_close()
+
+
 func _close() -> void:
 	_open = false
 	visible = false
 	Narration.stop()
 	dialogue_finished.emit()
+
+
+func _input(event: InputEvent) -> void:
+	if not _open:
+		return
+	# Explore: the Continue button reads itself aloud on touch.
+	ExploreTouch.handle(event, [{
+		"key": "continue",
+		"label": "Continue. Tap it to hear the next line.",
+		"rect": _continue_button.get_global_rect(),
+	}])
+	# Tapping the spoken text repeats the current line.
+	if event is InputEventScreenTouch and (event as InputEventScreenTouch).pressed:
+		if _text_label.get_global_rect().has_point((event as InputEventScreenTouch).position):
+			Narration.stop()
+			Narration.speak(_lines[_index])
 
 
 func _unhandled_input(event: InputEvent) -> void:
