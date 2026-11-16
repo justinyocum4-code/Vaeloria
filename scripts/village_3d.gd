@@ -1,5 +1,9 @@
 extends Node3D
-## Aldermere village in 3D — Phase 1 of the full game (v1.1.0).
+## Aldermere village in 3D — Phase 1 of the full game (v1.1.0),
+## polished in v1.1.1: talking to a character cuts to a cinematic
+## scene (camera close-up, lines spoken aloud, auto-advance) instead
+## of a text box, and the village is dressed up (market stall, well,
+## flowers, stepping stones, flickering torches, floating embers).
 ## Walk with arrows / D-pad / WASD, or tap-to-move on touch screens.
 ## Talk to Elder Maren and Lyra Voss (Lyra joins the party), then face
 ## the Ember Wolf at the east gate. Dragging a finger across the screen
@@ -12,15 +16,22 @@ const WORLD_SIZE := Vector2(48, 36)
 const WALK_SPEED := 5.0
 const TALK_RANGE := 3.5
 const SPAWN := Vector3(0, 0, 12)
+# A fingertip tap always drifts a few pixels; 64px is generous enough
+# for a real finger while still far below a deliberate drag.
+const TAP_TOLERANCE := 64.0
 
 var _player: CharacterBody3D
 var _player_model: Node3D
 var _camera_rig: Node3D
 var _camera: Camera3D
 var _dialogue: DialogueBox
+var _cutscene: CutsceneDialogue
+var _cutscene_active := false
+var _camera_tween: Tween
 var _status_label: Label
 var _objective_label: Label
 var _prompt_label: Label
+var _talk_button: Button
 var _npcs: Array = []
 var _near_npc: Dictionary = {}
 var _pending_battle := ""
@@ -29,11 +40,18 @@ var _touch_target := Vector3.ZERO
 var _save_button: Button
 var _title_button: Button
 var _tap_press_pos := Vector2.ZERO
+var _tap_press_pick: Dictionary = {}
+var _tap_press_npc_id := ""
 var _tap_moved := false
 var _leaving := false
 var _met_maren := false
 var _lyra_node: Node3D
 var _wolf_body: StaticBody3D
+# World animation (torches flicker, pond glints bob, embers rise).
+var _torch_lights: Array = []
+var _pond_glints: Array = []
+var _ember_motes: Array = []
+var _anim_time := 0.0
 
 
 func _ready() -> void:
@@ -46,11 +64,22 @@ func _ready() -> void:
 	_build_hud()
 	_dialogue = DialogueBox.new()
 	# DialogueBox is a Control; add it to a CanvasLayer so it draws on top.
+	# It is only used for the opening narration now — NPC talks use the
+	# cinematic cutscene below.
 	var dialog_layer := CanvasLayer.new()
 	dialog_layer.layer = 20
 	dialog_layer.add_child(_dialogue)
 	add_child(dialog_layer)
 	_dialogue.dialogue_finished.connect(_on_dialogue_finished)
+	# Cinematic dialogue for NPC conversations (layer 30, above the
+	# text box).
+	var cut_layer := CanvasLayer.new()
+	cut_layer.layer = 30
+	_cutscene = CutsceneDialogue.new()
+	cut_layer.add_child(_cutscene)
+	add_child(cut_layer)
+	_cutscene.finished.connect(_on_cutscene_finished)
+	_cutscene.skipped.connect(_on_cutscene_skipped)
 	_update_objective()
 	if not GameState.intro_done:
 		GameState.intro_done = true
@@ -96,6 +125,9 @@ func _build_world() -> void:
 	var pond := MeshFactory.make_pond(3.0)
 	pond.position = Vector3(-19, 0, 5)
 	add_child(pond)
+	for child in pond.get_children():
+		if child.name.begins_with("Glint"):
+			_pond_glints.append(child)
 	for rock_pos in [Vector3(-15.5, 0.35, 7.5), Vector3(-22, 0.3, 2.5)]:
 		var rock := MeshInstance3D.new()
 		var rock_mesh := SphereMesh.new()
@@ -123,6 +155,84 @@ func _build_world() -> void:
 	var gate := MeshFactory.make_gate()
 	gate.position = Vector3(22, 0, 0)
 	add_child(gate)
+
+	# Market stall and well, either side of the crossroads.
+	var stall := MeshFactory.make_market_stall()
+	stall.position = Vector3(-7, 0, 5)
+	stall.rotation.y = PI / 2.0
+	add_child(stall)
+	var well := MeshFactory.make_well()
+	well.position = Vector3(6, 0, -6)
+	add_child(well)
+
+	# Flowers and grass tufts (no colliders — the ground handles taps).
+	var bloom_colors: Array = [
+		Color(0.9, 0.2, 0.2), Color(0.95, 0.75, 0.2),
+		Color(0.6, 0.3, 0.85), Color(0.95, 0.95, 0.95),
+	]
+	var flower_i := 0
+	for flower_pos in [
+		Vector3(-10, 0, 2), Vector3(-12, 0, -4), Vector3(10, 0, 8),
+		Vector3(-18, 0, -8), Vector3(18, 0, 4), Vector3(4, 0, -8),
+		Vector3(-4, 0, 12), Vector3(12, 0, -12), Vector3(-2, 0, 8),
+		Vector3(18, 0, 12), Vector3(-16, 0, 12), Vector3(8, 0, 12),
+		Vector3(-8, 0, -12), Vector3(2, 0, -12),
+	]:
+		var flower := MeshFactory.make_flower(bloom_colors[flower_i % bloom_colors.size()])
+		flower.position = flower_pos
+		add_child(flower)
+		flower_i += 1
+	for tuft_pos in [
+		Vector3(-11, 0, 6), Vector3(11, 0, -4), Vector3(-6, 0, -10),
+		Vector3(14, 0, 2), Vector3(-19, 0, -2), Vector3(6, 0, 10),
+		Vector3(-2, 0, -10), Vector3(16, 0, 8), Vector3(-14, 0, 8),
+		Vector3(9, 0, -10),
+	]:
+		var tuft := MeshFactory.make_grass_tuft()
+		tuft.position = tuft_pos
+		add_child(tuft)
+
+	# Stepping stones along both roads.
+	var stone_i := 0
+	for sx in range(-20, 21, 3):
+		var stone := MeshFactory.make_stepping_stone()
+		stone.position = Vector3(float(sx), 0, 0.4 if stone_i % 2 == 0 else -0.4)
+		add_child(stone)
+		stone_i += 1
+	for sz in range(-14, 15, 3):
+		var stone2 := MeshFactory.make_stepping_stone()
+		stone2.position = Vector3(0.4 if stone_i % 2 == 0 else -0.4, 0, float(sz))
+		add_child(stone2)
+		stone_i += 1
+
+	# Torches: two by the gate, two by the shrine. Their lights flicker.
+	for torch_pos in [
+		Vector3(20, 0, -2.5), Vector3(20, 0, 2.5),
+		Vector3(2.5, 0, -4), Vector3(-2.5, 0, -4),
+	]:
+		var torch := MeshFactory.make_torch()
+		torch.position = torch_pos
+		add_child(torch)
+		for child in torch.get_children():
+			if child is OmniLight3D:
+				_torch_lights.append(child)
+
+	# Ember motes floating around the shrine crystal.
+	for i in range(10):
+		var mote := MeshInstance3D.new()
+		var mote_mesh := SphereMesh.new()
+		mote_mesh.radius = 0.09
+		mote_mesh.height = 0.18
+		mote.mesh = mote_mesh
+		mote.material_override = MeshFactory.mat(Color(1, 0.75, 0.25), Color(1, 0.7, 0.2), 2.5)
+		var angle := float(i) * TAU / 10.0
+		var base := Vector3(cos(angle) * 1.1, 1.2, sin(angle) * 1.1)
+		mote.position = base
+		shrine.add_child(mote)
+		_ember_motes.append({
+			"node": mote, "phase": float(i) * 0.63,
+			"speed": 0.35 + float(i % 3) * 0.12, "base": base,
+		})
 
 
 func _add_path(pos: Vector3, size: Vector3) -> void:
@@ -325,6 +435,22 @@ func _build_hud() -> void:
 	_prompt_label.visible = false
 	hud.add_child(_prompt_label)
 
+	# Big tappable Talk button: when Kael stands near someone, this
+	# appears above the prompt — a second way to start a conversation
+	# for fingers that keep missing the character on screen.
+	_talk_button = Button.new()
+	_talk_button.text = "Talk"
+	_talk_button.custom_minimum_size = Vector2(320, 56)
+	_talk_button.add_theme_font_size_override("font_size", 26)
+	_talk_button.visible = false
+	_talk_button.pressed.connect(_on_talk_button_pressed)
+	_talk_button.set_anchors_preset(Control.PRESET_CENTER_BOTTOM)
+	_talk_button.offset_left = -160
+	_talk_button.offset_right = 160
+	_talk_button.offset_top = -124
+	_talk_button.offset_bottom = -68
+	hud.add_child(_talk_button)
+
 	_update_status()
 
 
@@ -374,10 +500,17 @@ func _show_prompt(text: String) -> void:
 	_prompt_label.visible = true
 
 
+func _on_talk_button_pressed() -> void:
+	if _near_npc.is_empty():
+		return
+	Sfx.play_select()
+	_talk_to(_near_npc)
+
+
 # -------------------------------------------------------------- interaction ---
 
 func _physics_process(delta: float) -> void:
-	if _dialogue.is_open():
+	if _dialogue.is_open() or _cutscene_active:
 		_player.velocity = Vector3(0, -0.5, 0)
 		_player.move_and_slide()
 		return
@@ -409,12 +542,16 @@ func _physics_process(delta: float) -> void:
 
 
 func _process(delta: float) -> void:
-	# Camera rig follows the player with light smoothing.
-	if _player != null and _camera_rig != null:
+	_anim_time += delta
+	_animate_world()
+	# Camera rig follows the player with light smoothing — but not
+	# during a cutscene, when the camera is framed on the two speakers.
+	if _player != null and _camera_rig != null and not _cutscene_active:
 		var weight := 1.0 - exp(-6.0 * delta)
 		_camera_rig.global_position = _camera_rig.global_position.lerp(_player.global_position, weight)
-	if _dialogue.is_open():
+	if _dialogue.is_open() or _cutscene_active:
 		_prompt_label.visible = false
+		_talk_button.visible = false
 		return
 	_near_npc = {}
 	var best_dist := TALK_RANGE
@@ -426,15 +563,45 @@ func _process(delta: float) -> void:
 			_near_npc = npc
 	if _near_npc.is_empty():
 		_prompt_label.visible = false
+		_talk_button.visible = false
 	else:
 		_show_prompt("Talk: %s  —  press Enter / A" % _near_npc["name"])
+		_talk_button.text = "Talk: %s" % _near_npc["name"]
+		_talk_button.visible = true
+
+
+## Torch flicker, pond shimmer, floating embers — the village stays
+## alive even while the player stands still.
+func _animate_world() -> void:
+	var t := _anim_time
+	for i in _torch_lights.size():
+		var light: OmniLight3D = _torch_lights[i]
+		if is_instance_valid(light):
+			var phase := float(i) * 1.7
+			light.light_energy = 0.9 + 0.22 * sin(t * 7.0 + phase) + 0.12 * sin(t * 13.0 + phase * 1.7)
+	for i in _pond_glints.size():
+		var glint: Node3D = _pond_glints[i]
+		if is_instance_valid(glint):
+			glint.position.y = 0.08 + 0.02 * sin(t * 1.5 + float(i) * 2.1)
+	for mote in _ember_motes:
+		var node: Node3D = mote["node"]
+		if not is_instance_valid(node):
+			continue
+		var phase: float = mote["phase"]
+		var speed: float = mote["speed"]
+		var base: Vector3 = mote["base"]
+		var rise := fmod(t * speed + phase * 2.2, 2.2)
+		node.position = base + Vector3(sin(t * 0.7 + phase) * 0.3, rise, cos(t * 0.5 + phase) * 0.3)
+		var s := 1.0 - rise / 2.6
+		node.scale = Vector3.ONE * maxf(0.4, s)
 
 
 func _input(event: InputEvent) -> void:
 	# Built-in explore-by-touch: dragging a finger over the 3D world
 	# reads it aloud; the HUD buttons read themselves. The dialogue box
-	# handles its own explore while it is open.
-	if _dialogue.is_open():
+	# handles its own explore while it is open, and the cutscene
+	# handles its own input while a scene plays.
+	if _dialogue.is_open() or _cutscene_active:
 		return
 	var items: Array = []
 	items.append({
@@ -443,10 +610,17 @@ func _input(event: InputEvent) -> void:
 	items.append({
 		"key": "title", "label": "Title screen.", "rect": _title_button.get_global_rect(),
 	})
+	if _talk_button.visible and not _near_npc.is_empty():
+		items.append({
+			"key": "talk", "label": "Talk to " + str(_near_npc.get("name", "someone")) + ".",
+			"rect": _talk_button.get_global_rect(),
+		})
 	ExploreTouch.handle(event, items)
 	if event is InputEventScreenDrag or event is InputEventScreenTouch or event is InputEventMouseMotion:
 		if not _over_hud_button(_event_position(event)):
-			ExploreTouch3D.handle(event, _camera)
+			# Exclude Kael's own body from the ray, so it can never
+			# block a pick when he stands close to an NPC.
+			ExploreTouch3D.handle(event, _camera, [_player.get_rid()])
 
 
 func _event_position(event: InputEvent) -> Vector2:
@@ -464,17 +638,20 @@ func _over_hud_button(pos: Vector2) -> bool:
 
 
 func _notification(what: int) -> void:
-	# Android system Back button: close the dialogue first, otherwise
-	# back to the title — never straight out of the game.
+	# Android system Back button: exit a cutscene first, then close
+	# the dialogue, otherwise back to the title — never straight out
+	# of the game.
 	if what == NOTIFICATION_WM_GO_BACK_REQUEST:
-		if _dialogue.is_open():
+		if _cutscene_active:
+			_cutscene.finish_skip()
+		elif _dialogue.is_open():
 			_dialogue.dismiss()
 		else:
 			_on_title_pressed()
 
 
 func _unhandled_input(event: InputEvent) -> void:
-	if _dialogue.is_open():
+	if _dialogue.is_open() or _cutscene_active:
 		return
 	if event.is_action_pressed("ui_cancel"):
 		_on_title_pressed()
@@ -488,38 +665,51 @@ func _unhandled_input(event: InputEvent) -> void:
 		if touch.pressed:
 			_tap_press_pos = touch.position
 			_tap_moved = false
-			var hit := ExploreTouch3D.pick(touch.position, _camera)
+			_tap_press_npc_id = ""
+			# Judge the tap by what was under the finger WHEN IT WENT
+			# DOWN, not when it lifts. v1.1.0 judged it at the release
+			# position — but pressing on anything started tap-to-move,
+			# so Kael walked and the camera followed before the finger
+			# lifted, and the release ray no longer pointed at the
+			# character. That is why tapping a character did nothing
+			# while dragging across it still spoke its name.
+			_tap_press_pick = ExploreTouch3D.pick(touch.position, _camera, [_player.get_rid()])
+			if not _tap_press_pick.is_empty():
+				var node: Node = _tap_press_pick.get("node")
+				if node != null:
+					_tap_press_npc_id = str(node.get_meta("npc_id", ""))
+				# A press on a character must NOT start tap-to-move:
+				# the walking is exactly what shifted the camera and
+				# broke the tap.
+				if _tap_press_npc_id == "":
+					_touch_active = true
+					_touch_target = _tap_press_pick.get("position", Vector3.ZERO)
+		else:
+			_touch_active = false
+			# A quick tap (finger barely moved) activates what was
+			# under it at press time; a drag only moves. This is what
+			# makes explore-by-touch possible: dragging across an NPC
+			# reads its name without talking to it, and only a
+			# deliberate tap starts the talk.
+			if not _tap_moved and touch.position.distance_to(_tap_press_pos) < TAP_TOLERANCE:
+				if _tap_press_npc_id != "":
+					for npc in _npcs:
+						if npc["id"] == _tap_press_npc_id:
+							_talk_to(npc)
+							return
+				elif not _tap_press_pick.is_empty():
+					_touch_active = true
+					_touch_target = _tap_press_pick.get("position", Vector3.ZERO)
+	elif event is InputEventScreenDrag:
+		var drag := event as InputEventScreenDrag
+		# A drag that started on a character is exploration only —
+		# never walk the player while the finger explores an NPC.
+		if _tap_press_npc_id == "":
+			var hit := ExploreTouch3D.pick(drag.position, _camera, [_player.get_rid()])
 			if not hit.is_empty():
 				_touch_active = true
 				_touch_target = hit["position"]
-		else:
-			_touch_active = false
-			# A quick tap (finger barely moved) activates what is under
-			# it; a drag only moves. This is what makes explore-by-touch
-			# possible: dragging across an NPC reads its name without
-			# talking to it, and only a deliberate tap starts the talk.
-			if not _tap_moved and touch.position.distance_to(_tap_press_pos) < 48.0:
-				var hit := ExploreTouch3D.pick(touch.position, _camera)
-				var npc_id := ""
-				if not hit.is_empty():
-					var node: Node = hit["node"]
-					if node != null:
-						npc_id = str(node.get_meta("npc_id", ""))
-				if npc_id != "":
-					for npc in _npcs:
-						if npc["id"] == npc_id:
-							_talk_to(npc)
-							return
-				if not hit.is_empty():
-					_touch_active = true
-					_touch_target = hit["position"]
-	elif event is InputEventScreenDrag:
-		var drag := event as InputEventScreenDrag
-		var hit := ExploreTouch3D.pick(drag.position, _camera)
-		if not hit.is_empty():
-			_touch_active = true
-			_touch_target = hit["position"]
-		if drag.position.distance_to(_tap_press_pos) > 48.0:
+		if drag.position.distance_to(_tap_press_pos) > TAP_TOLERANCE:
 			_tap_moved = true
 
 
@@ -536,18 +726,90 @@ func _talk_to(npc: Dictionary) -> void:
 	Sfx.play_select()
 	_touch_active = false
 	_pending_battle = ""
-	_show_lines(npc["name"], _npc_lines(npc))
 	# Remember which NPC we are talking to for the finish handler.
 	_near_npc = npc
 	if npc["enemy"] != "" and not _npc_already_met(npc["id"]):
 		_pending_battle = npc["enemy"]
+	_start_cutscene(npc)
 
 
 func _show_lines(speaker: String, lines: Array) -> void:
+	# Only the opening narration still uses the text box; NPC talks
+	# cut to a cinematic scene (see _start_cutscene).
 	_dialogue.show_lines(speaker, lines)
 
 
 func _on_dialogue_finished() -> void:
+	# The opening narration uses the text box; NPC talks use cutscenes.
+	_finish_talk()
+
+
+## Cinematic scene: the camera sweeps in close on Kael and the NPC
+## facing each other, and the cutscene UI plays their lines aloud.
+func _start_cutscene(npc: Dictionary) -> void:
+	_cutscene_active = true
+	var player_pos: Vector3 = _player.global_position
+	var npc_node: Node3D = npc["node"]
+	var npc_pos: Vector3 = npc_node.global_position
+	# Face each other (humanoids are built facing +Z).
+	_player_model.rotation.y = atan2(npc_pos.x - player_pos.x, npc_pos.z - player_pos.z)
+	npc_node.rotation.y = atan2(player_pos.x - npc_pos.x, player_pos.z - npc_pos.z)
+	# Frame the shot: camera to the side of the pair, distance scaled
+	# to how far apart they stand.
+	var mid := (player_pos + npc_pos) * 0.5
+	var sep := player_pos.distance_to(npc_pos)
+	var dir := npc_pos - player_pos
+	dir.y = 0
+	if dir.length() < 0.5:
+		dir = Vector3(0, 0, 1)
+	dir = dir.normalized()
+	var side := dir.cross(Vector3.UP).normalized()
+	var cam_dist := clampf(sep * 0.9 + 1.5, 4.5, 12.0)
+	var cam_pos := mid + side * cam_dist + Vector3(0, 1.6, 0)
+	var look_target := mid + Vector3(0, 1.1, 0)
+	if _camera_tween != null and _camera_tween.is_valid():
+		_camera_tween.kill()
+	# During the shot the camera rides the rig at local (0,0,0), so
+	# the rig itself carries the whole transform.
+	_camera.position = Vector3.ZERO
+	_camera.rotation = Vector3.ZERO
+	_camera_tween = create_tween()
+	_camera_tween.set_parallel(true)
+	_camera_tween.tween_property(_camera_rig, "global_position", cam_pos, 0.8).set_trans(Tween.TRANS_CUBIC).set_ease(Tween.EASE_OUT)
+	var look := Transform3D(Basis(), cam_pos).looking_at(look_target, Vector3.UP)
+	_camera_tween.tween_property(_camera_rig, "quaternion", look.basis.get_rotation_quaternion(), 0.8).set_trans(Tween.TRANS_CUBIC).set_ease(Tween.EASE_OUT)
+	# Build the lines for the cutscene UI.
+	var lines: Array = []
+	for line in _npc_lines(npc):
+		lines.append({"speaker": npc["name"], "text": line})
+	_cutscene.play(lines)
+
+
+## Return the camera to the normal following view after a scene.
+func _end_cutscene() -> void:
+	_cutscene_active = false
+	if _camera_tween != null and _camera_tween.is_valid():
+		_camera_tween.kill()
+	_camera_tween = create_tween()
+	_camera_tween.set_parallel(true)
+	_camera_tween.tween_property(_camera, "position", Vector3(0, 10, 14), 0.5).set_trans(Tween.TRANS_CUBIC).set_ease(Tween.EASE_OUT)
+	_camera_tween.tween_property(_camera, "rotation", Vector3(-0.62, 0, 0), 0.5).set_trans(Tween.TRANS_CUBIC).set_ease(Tween.EASE_OUT)
+	_camera_tween.tween_property(_camera_rig, "quaternion", Quaternion.IDENTITY, 0.5).set_trans(Tween.TRANS_CUBIC).set_ease(Tween.EASE_OUT)
+
+
+func _on_cutscene_finished() -> void:
+	_end_cutscene()
+	_finish_talk()
+
+
+func _on_cutscene_skipped() -> void:
+	# Skipping exits the conversation without its effects: Lyra does
+	# not join, the wolf does not attack. The player can talk again.
+	_pending_battle = ""
+	_end_cutscene()
+
+
+func _finish_talk() -> void:
 	# Mark party members as met; trigger battle for monsters.
 	if _near_npc.is_empty():
 		_update_objective()
