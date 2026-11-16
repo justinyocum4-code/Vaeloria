@@ -20,10 +20,13 @@ var _status_label: Label
 var _menu_buttons: Array = []
 var _result_button: Button
 var _battle_over := false
+var _scroll: ScrollContainer
+var _leaving := false
 
 
 func _ready() -> void:
 	_rng.randomize()
+	ExploreTouch.reset()
 	_setup_enemy()
 	_build()
 
@@ -57,13 +60,22 @@ func _build() -> void:
 	margin.set_anchors_preset(PRESET_FULL_RECT)
 	margin.add_theme_constant_override("margin_left", 24)
 	margin.add_theme_constant_override("margin_right", 24)
-	margin.add_theme_constant_override("margin_top", 16)
-	margin.add_theme_constant_override("margin_bottom", 16)
+	margin.add_theme_constant_override("margin_top", 12)
+	margin.add_theme_constant_override("margin_bottom", 12)
 	add_child(margin)
 
+	# ScrollContainer safety net: the whole battle layout must fit a
+	# 540-unit-tall screen. v1.0 overflowed it, so the "Return to Village"
+	# button sat below the fold after a win and the screen looked frozen.
+	_scroll = ScrollContainer.new()
+	_scroll.set_anchors_preset(PRESET_FULL_RECT)
+	_scroll.horizontal_scroll_mode = ScrollContainer.SCROLL_MODE_DISABLED
+	margin.add_child(_scroll)
+
 	var vbox := VBoxContainer.new()
-	vbox.add_theme_constant_override("separation", 12)
-	margin.add_child(vbox)
+	vbox.add_theme_constant_override("separation", 8)
+	vbox.size_flags_horizontal = Control.SIZE_EXPAND_FILL
+	_scroll.add_child(vbox)
 
 	_enemy_label = Label.new()
 	_enemy_label.text = _enemy_name
@@ -80,7 +92,7 @@ func _build() -> void:
 	_enemy_rect.texture = load(_enemy_texture)
 	_enemy_rect.texture_filter = CanvasItem.TEXTURE_FILTER_NEAREST
 	_enemy_rect.stretch_mode = TextureRect.STRETCH_KEEP_ASPECT_CENTERED
-	_enemy_rect.custom_minimum_size = Vector2(192, 144)
+	_enemy_rect.custom_minimum_size = Vector2(160, 96)
 	_enemy_rect.expand_mode = TextureRect.EXPAND_IGNORE_SIZE
 	center.add_child(_enemy_rect)
 
@@ -99,7 +111,7 @@ func _build() -> void:
 	_log_label.add_theme_font_size_override("font_size", 26)
 	_log_label.add_theme_color_override("font_color", Color(1, 1, 1))
 	_log_label.autowrap_mode = TextServer.AUTOWRAP_WORD_SMART
-	_log_label.custom_minimum_size = Vector2(0, 96)
+	_log_label.custom_minimum_size = Vector2(0, 56)
 	_log_label.vertical_alignment = VERTICAL_ALIGNMENT_TOP
 	vbox.add_child(_log_label)
 
@@ -126,7 +138,7 @@ func _build() -> void:
 
 	_result_button = Button.new()
 	_result_button.text = "Return to Village"
-	_result_button.custom_minimum_size = Vector2(420, 68)
+	_result_button.custom_minimum_size = Vector2(420, 64)
 	_result_button.add_theme_font_size_override("font_size", 30)
 	_result_button.visible = false
 	_result_button.pressed.connect(_on_return_to_village)
@@ -141,7 +153,7 @@ func _build() -> void:
 func _make_menu_button(text: String, handler: Callable) -> Button:
 	var button := Button.new()
 	button.text = text
-	button.custom_minimum_size = Vector2(340, 64)
+	button.custom_minimum_size = Vector2(340, 56)
 	button.add_theme_font_size_override("font_size", 28)
 	button.pressed.connect(handler)
 	return button
@@ -227,7 +239,7 @@ func _on_run() -> void:
 		return
 	_set_menu_enabled(false)
 	if _rng.randi_range(1, 100) <= 70:
-		_log("Kael ran away safely!")
+		_log("Kael ran away safely! Press Return to Village to continue.")
 		_battle_over = true
 		_show_result()
 	else:
@@ -264,6 +276,7 @@ func _win() -> void:
 	var text := "Victory! Kael gained %d XP." % _enemy_xp
 	if levelled:
 		text += " Kael reached level %d! HP and attack increased!" % GameState.level
+	text += " Press Return to Village to continue."
 	_log(text)
 	_show_result()
 
@@ -274,7 +287,7 @@ func _lose() -> void:
 	GameState.mp = GameState.max_mp / 2
 	Sfx.play_defeat()
 	_update_status()
-	_log("Kael was defeated... Mira's light brings him back to the village.")
+	_log("Kael was defeated... Mira's light brings him back to the village. Press Return to Village to continue.")
 	_show_result()
 
 
@@ -282,10 +295,57 @@ func _show_result() -> void:
 	_set_menu_enabled(false)
 	_result_button.visible = true
 	_result_button.grab_focus()
+	# The button must actually be on screen: scroll it into view.
+	_scroll.call_deferred("ensure_control_visible", _result_button)
 
 
 func _on_return_to_village() -> void:
+	if _leaving:
+		return
+	_leaving = true
 	Sfx.play_select()
 	GameState.spawn_pos = Vector2(640, 500)
 	GameState.save_game()
 	get_tree().change_scene_to_file("res://scenes/village.tscn")
+
+
+func _input(event: InputEvent) -> void:
+	# Built-in explore-by-touch: dragging a finger over a button reads it.
+	var items: Array = []
+	for button in _menu_buttons:
+		var b := button as Button
+		items.append({
+			"key": "menu_" + b.text,
+			"label": b.text,
+			"rect": b.get_global_rect(),
+		})
+	if _result_button.visible:
+		items.append({
+			"key": "result",
+			"label": "Return to Village. Battle over. Tap it to continue.",
+			"rect": _result_button.get_global_rect(),
+		})
+	items.append({
+		"key": "enemy",
+		"label": "%s, health %d of %d." % [_enemy_name, maxi(0, _enemy_hp), _enemy_max_hp],
+		"rect": _enemy_rect.get_global_rect(),
+	})
+	ExploreTouch.handle(event, items)
+
+
+func _unhandled_input(event: InputEvent) -> void:
+	# Enter / A / OK after the battle ends continues; Back leaves the
+	# battle for the village instead of quitting the whole game.
+	if event.is_action_pressed("ui_accept") and _battle_over:
+		_on_return_to_village()
+		get_viewport().set_input_as_handled()
+	elif event.is_action_pressed("ui_cancel"):
+		_on_return_to_village()
+		get_viewport().set_input_as_handled()
+
+
+func _notification(what: int) -> void:
+	# Android system Back button: same as ui_cancel — back to the village,
+	# never straight out of the game.
+	if what == NOTIFICATION_WM_GO_BACK_REQUEST:
+		_on_return_to_village()
