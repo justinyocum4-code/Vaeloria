@@ -54,15 +54,18 @@ jobs:
           text = open(path).read() if os.path.exists(path) else ""
           if "[gd_resource" not in text:
               text = '[gd_resource type="EditorSettings" format=3]\n\n[resource]\n' + text
-          if "export/android/java_sdk_path" in text:
-              text = re.sub(r'export/android/java_sdk_path="[^"]*"',
-                            'export/android/java_sdk_path="' + java_dir + '"', text)
-          else:
-              text = text.rstrip() + '\nexport/android/java_sdk_path="' + java_dir + '"\n'
+          # Godot writes the key as 'export/android/java_sdk_path = ""' (spaces
+          # around =), so drop any existing line for the key and append the
+          # correct one instead of regex-matching a specific spacing.
+          lines = [l for l in text.splitlines() if "export/android/java_sdk_path" not in l]
+          lines.append('export/android/java_sdk_path="' + java_dir + '"')
+          text = "\n".join(lines) + "\n"
           open(path, "w").write(text)
           print(open(path).read())
+          assert 'export/android/java_sdk_path="' + java_dir + '"' in text, "Java SDK path not set!"
           PYEOF
           grep java_sdk_path ~/.config/godot/editor_settings-4.6.tres
+          test "$(grep -o 'java_sdk_path="[^"]*"' ~/.config/godot/editor_settings-4.6.tres | cut -d'"' -f2)" != ""
 
       - name: Install Android export templates (missing from the container)
         run: |
