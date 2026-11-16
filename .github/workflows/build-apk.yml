@@ -75,6 +75,19 @@ jobs:
           mv ~/.local/share/godot/export_templates/4.6.stable/templates/* ~/.local/share/godot/export_templates/4.6.stable/
           ls ~/.local/share/godot/export_templates/4.6.stable/
 
+      # The image ships only build-tools 33.0.2 + platform android-33, but
+      # Godot 4.6 targets a newer SDK ("Could not find version of build tools
+      # that matches Target SDK, using 33.0.2") and the export then fails its
+      # config check with an empty error list. Install 34 and 35 to cover it.
+      - name: Install Android 34/35 SDK packages (Godot 4.6 target SDK)
+        run: |
+          SDKMANAGER="$(find /usr/lib/android-sdk -name sdkmanager -type f | head -1)"
+          echo "sdkmanager: $SDKMANAGER"
+          test -n "$SDKMANAGER"
+          yes | "$SDKMANAGER" --sdk_root=/usr/lib/android-sdk "platform-tools" "platforms;android-34" "build-tools;34.0.0" "platforms;android-35" "build-tools;35.0.0"
+          ls /usr/lib/android-sdk/build-tools/
+          ls /usr/lib/android-sdk/platforms/
+
       - name: Generate art and sounds (original, programmatic)
         run: python3 assets/generate_assets.py
 
@@ -82,7 +95,7 @@ jobs:
         run: godot --headless --import --quit
 
       - name: Export debug APK
-        run: godot --headless --export-debug "Android" build/lynxos-rpg-debug.apk
+        run: godot --headless --verbose --export-debug "Android" build/lynxos-rpg-debug.apk
 
       - name: Upload APK
         uses: actions/upload-artifact@v4
