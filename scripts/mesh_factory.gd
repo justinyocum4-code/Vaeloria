@@ -144,6 +144,19 @@ static func make_humanoid(spec: Dictionary) -> Node3D:
 	var hair_mesh := _sphere(0.34, Vector3(0, 1.86, -0.04), mat(hair))
 	hair_mesh.scale = Vector3(1, 0.75, 1)
 	root.add_child(hair_mesh)
+	# Face: two eyes and a mouth on the front (+Z) of the head. The
+	# mouth is a thin dark box whose height scales while the
+	# character speaks (see set_mouth_open) — v1.1.4 talking scenes.
+	var dark := mat(Color(0.12, 0.05, 0.05))
+	var eye_l := _sphere(0.035, Vector3(-0.11, 1.82, 0.30), dark)
+	eye_l.name = "EyeL"
+	root.add_child(eye_l)
+	var eye_r := _sphere(0.035, Vector3(0.11, 1.82, 0.30), dark)
+	eye_r.name = "EyeR"
+	root.add_child(eye_r)
+	var mouth := _box(Vector3(0.16, 0.03, 0.05), Vector3(0, 1.68, 0.30), dark)
+	mouth.name = "Mouth"
+	root.add_child(mouth)
 	if bool(spec.get("sword", false)):
 		var blade := _box(Vector3(0.07, 1.05, 0.18), Vector3(0.56, 1.35, 0.12), mat(Color(0.85, 0.85, 0.9)))
 		blade.rotation = Vector3(0.25, 0, -0.15)
@@ -156,6 +169,19 @@ static func make_humanoid(spec: Dictionary) -> Node3D:
 	if label_text != "":
 		root.add_child(_name_label(label_text, Vector3(0, 2.45, 0)))
 	return root
+
+
+## Mouth flap for talking scenes: open_amount 0 = closed (a thin
+## line), 1 = fully open. The mouth scales in Y around its center.
+## Nodes without a Mouth child (the wolf, props) are left alone.
+static func set_mouth_open(root: Node3D, open_amount: float) -> void:
+	if root == null:
+		return
+	var mouth := root.get_node_or_null("Mouth") as MeshInstance3D
+	if mouth == null:
+		return
+	var t := clampf(open_amount, 0.0, 1.0)
+	mouth.scale.y = lerpf(0.8, 4.0, t)
 
 
 ## Ember Wolf, built facing +Z. Body runs along Z, head at +Z.
