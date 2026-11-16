@@ -777,13 +777,15 @@ func _talk_to(npc: Dictionary) -> void:
 	_near_npc = npc
 	if npc["enemy"] != "" and not _npc_already_met(npc["id"]):
 		_pending_battle = npc["enemy"]
-	# Movie first, then the spoken dialogue scene. NPCs without a
-	# video go straight to the dialogue.
+	# Movie first: the lines are spoken inside the movie itself
+	# (subtitles + voice, clip loops until the lines are done).
+	# NPCs without a video go straight to the dialogue scene, and
+	# skipping the movie falls back to it too.
 	var video_path: String = VIDEO_SCENES.get(npc["id"], "")
 	if video_path != "":
 		_video_npc = npc
 		_video_active = true
-		_video.play(video_path)
+		_video.play(video_path, _cutscene_lines(npc))
 	else:
 		_start_cutscene(npc)
 
@@ -797,6 +799,14 @@ func _show_lines(speaker: String, lines: Array) -> void:
 func _on_dialogue_finished() -> void:
 	# The opening narration uses the text box; NPC talks use cutscenes.
 	_finish_talk()
+
+
+## Lines for a talk, as the movie and dialogue scenes consume them.
+func _cutscene_lines(npc: Dictionary) -> Array:
+	var lines: Array = []
+	for line in _npc_lines(npc):
+		lines.append({"speaker": npc["name"], "text": line})
+	return lines
 
 
 ## Cinematic scene: the camera sweeps in close on Kael and the NPC
@@ -834,10 +844,7 @@ func _start_cutscene(npc: Dictionary) -> void:
 	var look := Transform3D(Basis(), cam_pos).looking_at(look_target, Vector3.UP)
 	_camera_tween.tween_property(_camera_rig, "quaternion", look.basis.get_rotation_quaternion(), 0.8).set_trans(Tween.TRANS_CUBIC).set_ease(Tween.EASE_OUT)
 	# Build the lines for the cutscene UI.
-	var lines: Array = []
-	for line in _npc_lines(npc):
-		lines.append({"speaker": npc["name"], "text": line})
-	_cutscene.play(lines)
+	_cutscene.play(_cutscene_lines(npc))
 
 
 ## Return the camera to the normal following view after a scene.
@@ -864,14 +871,17 @@ func _on_cutscene_skipped() -> void:
 	_end_cutscene()
 
 
-## The movie played or was skipped: either way the talk goes ahead
-## into the spoken dialogue scene. Only skipping the dialogue
-## itself cancels the conversation.
+## The movie played through all its lines: the talk is complete —
+## Lyra joins, the wolf fight starts. Only skipping the movie falls
+## back to the letterbox dialogue scene (see _on_video_skipped).
 func _on_video_finished() -> void:
 	_video_active = false
-	_start_cutscene(_video_npc)
+	_finish_talk()
 
 
+## The movie was skipped: fall back to the letterbox dialogue
+## scene so the talk is never lost. Only skipping the dialogue
+## itself cancels the conversation.
 func _on_video_skipped() -> void:
 	_video_active = false
 	_start_cutscene(_video_npc)
