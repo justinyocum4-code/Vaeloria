@@ -26,8 +26,12 @@ var intro_done := false
 
 # Which enemy the battle scene should spawn ("wolf" or "slime").
 var battle_enemy := "wolf"
-# Where the player spawns in the village (set by Continue / battle return).
+# Where the player spawns in the 2D village (v1.0.x, kept for the old
+# scenes, which stay in the repo unused).
 var spawn_pos := Vector2(640, 500)
+# Where the player spawns in the 3D village (v1.1.0+). The 3D world is
+# ~48 x 36 units; the default spawn is the south road, facing the shrine.
+var spawn_pos_3d := Vector3(0, 0, 12)
 
 
 func xp_needed() -> int:
@@ -51,6 +55,7 @@ func reset_new_game() -> void:
 	intro_done = false
 	battle_enemy = "wolf"
 	spawn_pos = Vector2(640, 500)
+	spawn_pos_3d = Vector3(0, 0, 12)
 
 
 ## Adds XP. Returns true if Kael levelled up (may level more than once).
@@ -92,6 +97,9 @@ func save_game() -> bool:
 		"intro_done": intro_done,
 		"spawn_x": spawn_pos.x,
 		"spawn_y": spawn_pos.y,
+		"spawn3d_x": spawn_pos_3d.x,
+		"spawn3d_y": spawn_pos_3d.y,
+		"spawn3d_z": spawn_pos_3d.z,
 	}
 	var file := FileAccess.open(SAVE_PATH, FileAccess.WRITE)
 	if file == null:
@@ -130,6 +138,12 @@ func load_game() -> bool:
 	slime_defeated = bool(parsed.get("slime_defeated", false))
 	intro_done = bool(parsed.get("intro_done", false))
 	spawn_pos = Vector2(float(parsed.get("spawn_x", 640)), float(parsed.get("spawn_y", 500)))
+	# Old 2D saves have no 3D spawn: start at the 3D village spawn.
+	# (2D saves from v1.0.x do not carry over to the 3D version.)
+	if parsed.has("spawn3d_x"):
+		spawn_pos_3d = Vector3(float(parsed.get("spawn3d_x", 0)), float(parsed.get("spawn3d_y", 0)), float(parsed.get("spawn3d_z", 12)))
+	else:
+		spawn_pos_3d = Vector3(0, 0, 12)
 	hp = clampi(hp, 1, max_hp)
 	mp = clampi(mp, 0, max_mp)
 	return true
