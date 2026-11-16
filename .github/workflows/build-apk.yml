@@ -95,7 +95,9 @@ jobs:
         run: godot --headless --import --quit
 
       - name: Export debug APK
-        run: godot --headless --verbose --export-debug "Android" build/lynxos-rpg-debug.apk
+        run: |
+          mkdir -p build
+          godot --headless --verbose --export-debug "Android" build/lynxos-rpg-debug.apk
 
       - name: Upload APK
         uses: actions/upload-artifact@v4
