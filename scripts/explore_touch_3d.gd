@@ -19,7 +19,10 @@ static func reset() -> void:
 ## dictionary with "key", "label", "position" and "node" (the collider),
 ## or an empty dictionary when nothing was hit. A hit with no explore
 ## metadata still returns its position and node with an empty key.
-static func pick(screen_pos: Vector2, camera: Camera3D) -> Dictionary:
+## exclude_rids: bodies the ray must ignore — the village passes the
+## player's own CharacterBody3D RID, so the ray can never be blocked
+## by Kael himself when he stands close to an NPC.
+static func pick(screen_pos: Vector2, camera: Camera3D, exclude_rids: Array = []) -> Dictionary:
 	if camera == null:
 		return {}
 	var from := camera.project_ray_origin(screen_pos)
@@ -27,6 +30,7 @@ static func pick(screen_pos: Vector2, camera: Camera3D) -> Dictionary:
 	var query := PhysicsRayQueryParameters3D.create(from, to)
 	query.collide_with_areas = false
 	query.collide_with_bodies = true
+	query.exclude = exclude_rids
 	var space := camera.get_world_3d().direct_space_state
 	var hit := space.intersect_ray(query)
 	if hit.is_empty():
@@ -45,7 +49,7 @@ static func pick(screen_pos: Vector2, camera: Camera3D) -> Dictionary:
 ## Handles a drag / touch / mouse-motion event: speaks the label under
 ## the finger when it changes. Returns the key under the finger ("" if
 ## none), so tests and tap logic can tell what was hit.
-static func handle(event: InputEvent, camera: Camera3D) -> String:
+static func handle(event: InputEvent, camera: Camera3D, exclude_rids: Array = []) -> String:
 	var pos := Vector2.INF
 	if event is InputEventScreenDrag:
 		pos = (event as InputEventScreenDrag).position
@@ -55,7 +59,7 @@ static func handle(event: InputEvent, camera: Camera3D) -> String:
 		pos = (event as InputEventMouseMotion).position
 	else:
 		return _last_key
-	var result := pick(pos, camera)
+	var result := pick(pos, camera, exclude_rids)
 	var key: String = result.get("key", "")
 	var label: String = result.get("label", "")
 	if key != "" and key != _last_key:
