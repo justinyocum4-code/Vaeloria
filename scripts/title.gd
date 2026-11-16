@@ -2,11 +2,13 @@ extends Control
 ## Title screen: VAELORIA. Big buttons, D-pad focusable, touch friendly.
 ## New Game / Continue / Narration toggle. Shows the party sprites.
 
+var _new_button: Button
 var _continue_button: Button
 var _narration_button: Button
 
 
 func _ready() -> void:
+	ExploreTouch.reset()
 	_build()
 
 
@@ -61,9 +63,9 @@ func _build() -> void:
 		rect.expand_mode = TextureRect.EXPAND_IGNORE_SIZE
 		party.add_child(rect)
 
-	var new_button := _make_button("New Game")
-	new_button.pressed.connect(_on_new_game)
-	vbox.add_child(new_button)
+	_new_button = _make_button("New Game")
+	_new_button.pressed.connect(_on_new_game)
+	vbox.add_child(_new_button)
 
 	_continue_button = _make_button("Continue")
 	_continue_button.pressed.connect(_on_continue)
@@ -90,8 +92,21 @@ func _build() -> void:
 	footer.add_theme_color_override("font_color", Color(0.7, 0.7, 0.78))
 	vbox.add_child(footer)
 
-	new_button.grab_focus()
+	_new_button.grab_focus()
 	Narration.speak("Vaeloria. An original tale of the Emberstones.")
+
+
+func _input(event: InputEvent) -> void:
+	# Built-in explore-by-touch: dragging a finger over a button reads it.
+	var items: Array = []
+	for button in [_new_button, _continue_button, _narration_button]:
+		var b := button as Button
+		items.append({
+			"key": "title_" + b.text,
+			"label": b.text,
+			"rect": b.get_global_rect(),
+		})
+	ExploreTouch.handle(event, items)
 
 
 func _make_button(text: String) -> Button:
