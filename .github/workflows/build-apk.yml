@@ -31,10 +31,18 @@ jobs:
       - name: Check out project
         uses: actions/checkout@v4
 
-      - name: Install Python and Pillow (the Godot container has no Python)
+      - name: Install Python, Pillow, unzip, fontconfig (the Godot container is minimal)
         run: |
           apt-get update -qq
-          apt-get install -y -qq python3 python3-pil
+          apt-get install -y -qq python3 python3-pil unzip wget libfontconfig1
+
+      - name: Install Android export templates (missing from the container)
+        run: |
+          mkdir -p ~/.local/share/godot/export_templates/4.6.stable
+          wget -q https://github.com/godotengine/godot/releases/download/4.6-stable/Godot_v4.6-stable_export_templates.tpz -O /tmp/templates.tpz
+          unzip -q -o /tmp/templates.tpz -d ~/.local/share/godot/export_templates/4.6.stable
+          mv ~/.local/share/godot/export_templates/4.6.stable/templates/* ~/.local/share/godot/export_templates/4.6.stable/
+          ls ~/.local/share/godot/export_templates/4.6.stable/
 
       - name: Generate art and sounds (original, programmatic)
         run: python3 assets/generate_assets.py
