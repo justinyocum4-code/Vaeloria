@@ -1,3 +1,12 @@
+# Vaeloria — Build notes
+
+## v1.0.2 (Nov 16, 2026) — battle freeze + back button + touch exploration
+- BUG: after winning a battle the screen looked frozen with no Continue button. Cause: the battle layout was ~636 units tall on a 540-unit screen, so the "Return to Village" button sat below the fold. Fix: compacted the layout (smaller sprite/log/margins, now ends ~520) + a ScrollContainer safety net + the button scrolls itself into view and the victory line now says "Press Return to Village to continue." Verified headless: result button rect bottom 520 <= 540.
+- BUG: Android Back in battle quit the whole game (no handler). Fix: battle and village now handle both ui_cancel and NOTIFICATION_WM_GO_BACK_REQUEST — back returns to the village (battle) or the title (village, closing dialogue first). Title keeps the default (back quits).
+- NEW: built-in explore-by-touch (`scripts/explore_touch.gd`). Drag a finger across any screen and the game reads aloud whatever is under it (buttons, NPCs, enemies) via its own narration — no device accessibility needed. Village tap-to-talk moved from touch-press to tap-on-release so dragging across an NPC only speaks its name; a deliberate tap talks. Dialogue text can be tapped to hear the line again.
+- Headless test: /tmp/test_vaeloria.gd (frame-counted SceneTree, no awaits in _init — those deadlock headless). Run: `godot --headless --path . -s /tmp/test_vaeloria.gd`.
+- Future direction (Justin's call Nov 16): 3D version later; 2D is fine for now.
+
 # Vaeloria — Build notes (v1.0 starter)
 
 ## What this is
