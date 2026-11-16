@@ -22,9 +22,15 @@ var _near_npc: Dictionary = {}
 var _pending_battle := ""
 var _touch_active := false
 var _touch_target := Vector2.ZERO
+var _save_button: Button
+var _title_button: Button
+var _tap_press_pos := Vector2.ZERO
+var _tap_moved := false
+var _leaving := false
 
 
 func _ready() -> void:
+	ExploreTouch.reset()
 	_build_ground()
 	_build_decor()
 	_build_player()
@@ -285,21 +291,21 @@ func _build_hud() -> void:
 	_status_label.size_flags_horizontal = Control.SIZE_EXPAND_FILL
 	top_row.add_child(_status_label)
 
-	var save_button := Button.new()
-	save_button.text = "Save"
-	save_button.custom_minimum_size = Vector2(140, 48)
-	save_button.add_theme_font_size_override("font_size", 24)
-	save_button.focus_mode = Control.FOCUS_NONE
-	save_button.pressed.connect(_on_save_pressed)
-	top_row.add_child(save_button)
+	_save_button = Button.new()
+	_save_button.text = "Save"
+	_save_button.custom_minimum_size = Vector2(140, 48)
+	_save_button.add_theme_font_size_override("font_size", 24)
+	_save_button.focus_mode = Control.FOCUS_NONE
+	_save_button.pressed.connect(_on_save_pressed)
+	top_row.add_child(_save_button)
 
-	var title_button := Button.new()
-	title_button.text = "Title"
-	title_button.custom_minimum_size = Vector2(140, 48)
-	title_button.add_theme_font_size_override("font_size", 24)
-	title_button.focus_mode = Control.FOCUS_NONE
-	title_button.pressed.connect(_on_title_pressed)
-	top_row.add_child(title_button)
+	_title_button = Button.new()
+	_title_button.text = "Title"
+	_title_button.custom_minimum_size = Vector2(140, 48)
+	_title_button.add_theme_font_size_override("font_size", 24)
+	_title_button.focus_mode = Control.FOCUS_NONE
+	_title_button.pressed.connect(_on_title_pressed)
+	top_row.add_child(_title_button)
 
 	_objective_label = Label.new()
 	_objective_label.set_anchors_preset(Control.PRESET_TOP_WIDE)
@@ -360,6 +366,9 @@ func _on_save_pressed() -> void:
 
 
 func _on_title_pressed() -> void:
+	if _leaving:
+		return
+	_leaving = true
 	Sfx.play_select()
 	GameState.spawn_pos = _player.position
 	GameState.save_game()
@@ -411,6 +420,46 @@ func _process(_delta: float) -> void:
 		_show_prompt("Talk: %s  —  press Enter / A" % _near_npc["name"])
 
 
+func _input(event: InputEvent) -> void:
+	# Built-in explore-by-touch: dragging a finger over an NPC or a HUD
+	# button reads it aloud. The dialogue box handles its own explore
+	# while it is open.
+	if _dialogue.is_open():
+		return
+	var items: Array = []
+	items.append({
+		"key": "save", "label": "Save game.", "rect": _save_button.get_global_rect(),
+	})
+	items.append({
+		"key": "title", "label": "Title screen.", "rect": _title_button.get_global_rect(),
+	})
+	var xf: Transform2D = get_viewport().get_canvas_transform()
+	for npc in _npcs:
+		var node: Node2D = npc["node"]
+		var center: Vector2 = xf * node.position
+		var label: String = npc["name"]
+		if npc["enemy"] != "":
+			label += ". Tap to battle." if not _npc_already_met(npc["id"]) else ". Already defeated."
+		else:
+			label += ". Tap to talk."
+		items.append({
+			"key": "npc_" + npc["id"],
+			"label": label,
+			"rect": Rect2(center - Vector2(70, 70), Vector2(140, 140)),
+		})
+	ExploreTouch.handle(event, items)
+
+
+func _notification(what: int) -> void:
+	# Android system Back button: close the dialogue first, otherwise
+	# back to the title — never straight out of the game.
+	if what == NOTIFICATION_WM_GO_BACK_REQUEST:
+		if _dialogue.is_open():
+			_dialogue.dismiss()
+		else:
+			_on_title_pressed()
+
+
 func _unhandled_input(event: InputEvent) -> void:
 	if _dialogue.is_open():
 		return
@@ -425,20 +474,30 @@ func _unhandled_input(event: InputEvent) -> void:
 		var touch := event as InputEventScreenTouch
 		var world_pos: Vector2 = get_viewport().get_canvas_transform().affine_inverse() * touch.position
 		if touch.pressed:
+			_tap_press_pos = touch.position
+			_tap_moved = false
 			_touch_active = true
 			_touch_target = world_pos
-			for npc in _npcs:
-				var node: Node2D = npc["node"]
-				if world_pos.distance_to(node.position) < 70.0:
-					_touch_active = false
-					_talk_to(npc)
-					break
 		else:
 			_touch_active = false
+			# A quick tap (finger barely moved) activates what is under
+			# it; a drag only moves. This is what makes explore-by-touch
+			# possible: dragging across an NPC reads its name without
+			# talking to it, and only a deliberate tap starts the talk.
+			if not _tap_moved and touch.position.distance_to(_tap_press_pos) < 48.0:
+				for npc in _npcs:
+					var node: Node2D = npc["node"]
+					if world_pos.distance_to(node.position) < 70.0:
+						_talk_to(npc)
+						return
+				_touch_active = true
+				_touch_target = world_pos
 	elif event is InputEventScreenDrag:
 		var drag := event as InputEventScreenDrag
 		_touch_active = true
 		_touch_target = get_viewport().get_canvas_transform().affine_inverse() * drag.position
+		if drag.position.distance_to(_tap_press_pos) > 48.0:
+			_tap_moved = true
 	elif event is InputEventMouseButton:
 		var mouse := event as InputEventMouseButton
 		if mouse.button_index == MOUSE_BUTTON_LEFT and mouse.pressed:
