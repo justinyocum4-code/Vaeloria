@@ -1,0 +1,50 @@
+# Vaeloria — Godot 4.6 Android APK build (GitHub Actions).
+#
+# How it works: runs inside the barichello/godot-ci container, which ships
+# the matching Godot editor + export templates + Android SDK/JDK, then
+# exports a DEBUG-signed APK from the "Android" preset in export_presets.cfg.
+#
+# TODO (parent, before a store/public release):
+#   - Release signing with the Lynxos keystore. Add the 4 repo secrets
+#     (KEYSTORE_BASE64, KEYSTORE_PASSWORD, KEY_PASSWORD, KEY_ALIAS=lynxos),
+#     decode the keystore in a step, and switch the export to release mode
+#     with GODOT_ANDROID_KEYSTORE_* env vars. Do NOT paste keystore values
+#     into this file. Debug APKs install fine for sideload testing.
+#   - Leanback: the game is fully D-pad navigable; enabling the Android TV
+#     Leanback launcher entry is an editor preset option to confirm on the
+#     first real device test (see BUILD_NOTES.md).
+
+name: Build Android APK
+
+on:
+  workflow_dispatch:
+  push:
+    branches: [main]
+
+jobs:
+  android:
+    name: Export Android APK (Godot 4.6)
+    runs-on: ubuntu-latest
+    container:
+      image: barichello/godot-ci:4.6
+    steps:
+      - name: Check out project
+        uses: actions/checkout@v4
+
+      - name: Generate art and sounds (original, programmatic)
+        run: |
+          python3 -m pip install --quiet pillow || pip install --quiet pillow
+          python3 assets/generate_assets.py
+
+      - name: Import project (validates scripts and scenes)
+        run: godot --headless --import --quit
+
+      - name: Export debug APK
+        run: godot --headless --export-debug "Android" build/lynxos-rpg-debug.apk
+
+      - name: Upload APK
+        uses: actions/upload-artifact@v4
+        with:
+          name: lynxos-rpg-apk
+          path: build/lynxos-rpg-debug.apk
+          if-no-files-found: error
